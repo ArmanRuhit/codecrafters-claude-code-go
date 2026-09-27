@@ -11,6 +11,26 @@ import (
 )
 
 func main() {
+
+	var readTool = openai.ChatCompletionToolUnionParam{
+		OfFunction: &openai.ChatCompletionFunctionToolParam{
+			Function: openai.FunctionDefinitionParam{
+				Name: "Read",
+				Description: openai.String("Read and return the contents of a file"),
+				Parameters: openai.FunctionParameters{
+					"type": "object",
+					"properties": map[string]any{
+						"file_path":  map[string]any{
+							"type": "string",
+							"description": "The path to the file to read",
+						},
+					},
+					"required": []string{"file_path"},
+				},
+			},
+		},
+	}
+
 	var prompt string
 	flag.StringVar(&prompt, "p", "", "Prompt to send to LLM")
 	flag.Parse()
@@ -42,6 +62,7 @@ func main() {
 					},
 				},
 			},
+			Tools: []openai.ChatCompletionToolUnionParam{readTool},
 		},
 	)
 	if err != nil {
