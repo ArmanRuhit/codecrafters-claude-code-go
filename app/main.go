@@ -10,7 +10,7 @@ import (
 	"github.com/openai/openai-go/v3/option"
 )
 
-func main() {
+func sendMessage(apiKey string, baseUrl string, messages []openai.ChatCompletionMessageParamUnion) *openai.ChatCompletion {
 
 	var readTool = openai.ChatCompletionToolUnionParam{
 		OfFunction: &openai.ChatCompletionFunctionToolParam{
@@ -31,37 +31,13 @@ func main() {
 		},
 	}
 
-	var prompt string
-	flag.StringVar(&prompt, "p", "", "Prompt to send to LLM")
-	flag.Parse()
-
-	if prompt == "" {
-		panic("Prompt must not be empty")
-	}
-
-	apiKey := os.Getenv("OPENROUTER_API_KEY")
-	baseUrl := os.Getenv("OPENROUTER_BASE_URL")
-	if baseUrl == "" {
-		baseUrl = "https://openrouter.ai/api/v1"
-	}
-
-	if apiKey == "" {
-		panic("Env variable OPENROUTER_API_KEY not found")
-	}
-
+	
 	client := openai.NewClient(option.WithAPIKey(apiKey), option.WithBaseURL(baseUrl))
+
 	resp, err := client.Chat.Completions.New(context.Background(),
 		openai.ChatCompletionNewParams{
 			Model: "anthropic/claude-haiku-4.5",
-			Messages: []openai.ChatCompletionMessageParamUnion{
-				{
-					OfUser: &openai.ChatCompletionUserMessageParam{
-						Content: openai.ChatCompletionUserMessageParamContentUnion{
-							OfString: openai.String(prompt),
-						},
-					},
-				},
-			},
+			Messages: messages,
 			Tools: []openai.ChatCompletionToolUnionParam{readTool},
 		},
 	)
@@ -73,34 +49,75 @@ func main() {
 		panic("No choices in response")
 	}
 
-	// You can use print statements as follows for debugging, they'll be visible when running tests.
+	return resp
+}
+
+func main() {
+
+	baseUrl := os.Getenv("OPENROUTER_BASE_URL")
+	if baseUrl == "" {
+		baseUrl = "https://openrouter.ai/api/v1"
+	}
+
+	apiKey := os.Getenv("OPENROUTER_API_KEY")
+
+	if apiKey == "" {
+		panic("Env variable OPENROUTER_API_KEY not found")
+	}
+
+	var prompt string
+	flag.StringVar(&prompt, "p", "", "Prompt to send to LLM")
+	flag.Parse()
+
+	if prompt == "" {
+		panic("Prompt must not be empty")
+	}
+
+	messages := []openai.ChatCompletionMessageParamUnion{openai.UserMessage(prompt)}
+
+	
 	fmt.Fprintln(os.Stderr, "Logs from your program will appear here!")
 
-	msg := resp.Choices[0].Message
+	for {
+		resp := sendMessage(apiKey, baseUrl, messages)
+		msg := resp.Choices[0].Message
 
-	if len(msg.ToolCalls) == 0 {
+		if len(msg.ToolCalls) == 0 {
 		fmt.Print(msg.Content)
+		break;
 	} else {
 		// the model is asking us to run a tool.
-		toolcall := msg.ToolCalls[0]
+		for _, toolcall := range msg.ToolCalls {
+			switch toolcall.Function.Name {
+				case "Read": // must match the name we advertised
+					var args struct {
+						FilePath string `json:"file_path"`
+					}
+					if err := json.Unmarshal([]byte(toolcall.Function.Arguments), &args); err != nil {
+						fmt.Fprintf(os.Stderr, "bad tool arguments: %v\n", err)
+						os.Exit(1)
+					}
 
-		switch toolcall.Function.Name {
-		case "Read": // must match the name we advertised
-			var args struct {
-				FilePath string `json:"file_path"`
-			}
-			if err := json.Unmarshal([]byte(toolcall.Function.Arguments), &args); err != nil {
-				fmt.Fprintf(os.Stderr, "bad tool arguments: %v\n", err)
-				os.Exit(1)
-			}
+					contents, err := os.ReadFile(args.FilePath)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "read failed: %v\n", err)
+						os.Exit(1)
+					}
+					assistantParam := msg.ToAssistantMessageParam() // concrete variant - must be a variable
 
-			contents, err := os.ReadFile(args.FilePath)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "read failed: %v\n", err)
-				os.Exit(1)
+
+					messages = append(messages, openai.ChatCompletionMessageParamUnion{
+						OfAssistant: &assistantParam, // & requires an addressable value; &f is illegal in Go
+					})
+					messages = append(messages, openai.ToolMessage(string(contents), toolcall.ID))
 			}
-			fmt.Print(string(contents)) // raw bytes: no labels, no backtickes, no extra newline
 		}
+
+		
 	}
+	}
+
+
+	
 
 }
