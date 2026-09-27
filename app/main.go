@@ -5,7 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
-
+	"encoding/json"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 )
@@ -76,6 +76,31 @@ func main() {
 	// You can use print statements as follows for debugging, they'll be visible when running tests.
 	fmt.Fprintln(os.Stderr, "Logs from your program will appear here!")
 
-	// TODO: Uncomment the line below to pass the first stage
-	fmt.Print(resp.Choices[0].Message.Content)
+	msg := resp.Choices[0].Message
+
+	if len(msg.ToolCalls) == 0 {
+		fmt.Print(msg.Content)
+	} else {
+		// the model is asking us to run a tool.
+		toolcall := msg.ToolCalls[0]
+
+		switch toolcall.Function.Name {
+		case "Read": // must match the name we advertised
+			var args struct {
+				FilePath string `json:"file_path"`
+			}
+			if err := json.Unmarshal([]byte(toolcall.Function.Arguments), &args); err != nil {
+				fmt.Fprintf(os.Stderr, "bad tool arguments: %v\n", err)
+				os.Exit(1)
+			}
+
+			contents, err := os.ReadFile(args.FilePath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "read failed: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Print(string(contents)) // raw bytes: no labels, no backtickes, no extra newline
+		}
+	}
+
 }
