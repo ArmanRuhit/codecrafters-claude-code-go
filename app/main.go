@@ -8,6 +8,7 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"os"
+	"os/exec"
 )
 
 func sendMessage(apiKey string, baseUrl string, messages []openai.ChatCompletionMessageParamUnion) *openai.ChatCompletion {
@@ -33,7 +34,7 @@ func sendMessage(apiKey string, baseUrl string, messages []openai.ChatCompletion
 
 	var writeTool = openai.ChatCompletionToolUnionParam{
 		OfFunction: &openai.ChatCompletionFunctionToolParam{
-			Function : openai.FunctionDefinitionParam{
+			Function: openai.FunctionDefinitionParam{
 				Name:        "Write",
 				Description: openai.String("Write content to a file"),
 				Parameters: openai.FunctionParameters{
@@ -54,13 +55,32 @@ func sendMessage(apiKey string, baseUrl string, messages []openai.ChatCompletion
 		},
 	}
 
+	var bashTool = openai.ChatCompletionToolUnionParam{
+		OfFunction: &openai.ChatCompletionFunctionToolParam{
+			Function: openai.FunctionDefinitionParam{
+				Name: "Bash",
+				Description: openai.String("Execute a shell command"),
+				Parameters: openai.FunctionParameters {
+					"type": "object",
+					"properties": map[string]any {
+						"command": map[string]any {
+							"type": "string",
+							"description": "The command to execute",
+						},
+					},
+					"required": []string{"command"},
+				},
+			},
+		},
+	} 
+
 	client := openai.NewClient(option.WithAPIKey(apiKey), option.WithBaseURL(baseUrl))
 
 	resp, err := client.Chat.Completions.New(context.Background(),
 		openai.ChatCompletionNewParams{
 			Model:    "anthropic/claude-haiku-4.5",
 			Messages: messages,
-			Tools:    []openai.ChatCompletionToolUnionParam{readTool, writeTool},
+			Tools:    []openai.ChatCompletionToolUnionParam{readTool, writeTool, bashTool},
 		},
 	)
 	if err != nil {
@@ -146,11 +166,29 @@ func main() {
 					err := os.WriteFile(args.FilePath, []byte(args.Content), 0644)
 
 					if err != nil {
-						fmt.Fprintf(os.Stderr, "write failed:", err)
+						fmt.Fprintf(os.Stderr, "write failed: %v\n", err)
 						os.Exit(1)
 					}
 
 					messages = append(messages, openai.ToolMessage("File written successfully", toolcall.ID))
+
+				case "Bash":
+					var args struct{
+						Command string `json:"command"`
+					}
+
+					if err := json.Unmarshal([]byte(toolcall.Function.Arguments), &args); err != nil {
+						fmt.Fprintf(os.Stderr, "bad tool arguments: %v\n", err)
+						os.Exit(1)
+					}
+
+					out, err := exec.Command("sh", "-c", args.Command).CombinedOutput()
+
+					result := string(out)
+					if err != nil {
+						result = fmt.Sprintf("command failed: %v\n%s", err, out)
+					}
+					messages = append(messages, openai.ToolMessage(result, toolcall.ID))
 				}
 			}
 
