@@ -58,13 +58,13 @@ func sendMessage(apiKey string, baseUrl string, messages []openai.ChatCompletion
 	var bashTool = openai.ChatCompletionToolUnionParam{
 		OfFunction: &openai.ChatCompletionFunctionToolParam{
 			Function: openai.FunctionDefinitionParam{
-				Name: "Bash",
+				Name:        "Bash",
 				Description: openai.String("Execute a shell command"),
-				Parameters: openai.FunctionParameters {
+				Parameters: openai.FunctionParameters{
 					"type": "object",
-					"properties": map[string]any {
-						"command": map[string]any {
-							"type": "string",
+					"properties": map[string]any{
+						"command": map[string]any{
+							"type":        "string",
 							"description": "The command to execute",
 						},
 					},
@@ -72,7 +72,7 @@ func sendMessage(apiKey string, baseUrl string, messages []openai.ChatCompletion
 				},
 			},
 		},
-	} 
+	}
 
 	client := openai.NewClient(option.WithAPIKey(apiKey), option.WithBaseURL(baseUrl))
 
@@ -173,7 +173,7 @@ func main() {
 					messages = append(messages, openai.ToolMessage("File written successfully", toolcall.ID))
 
 				case "Bash":
-					var args struct{
+					var args struct {
 						Command string `json:"command"`
 					}
 
