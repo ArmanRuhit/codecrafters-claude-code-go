@@ -9,6 +9,8 @@ import (
 	"github.com/openai/openai-go/v3/option"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 )
 
 func sendMessage(apiKey string, baseUrl string, messages []openai.ChatCompletionMessageParamUnion) *openai.ChatCompletion {
@@ -94,6 +96,101 @@ func sendMessage(apiKey string, baseUrl string, messages []openai.ChatCompletion
 	return resp
 }
 
+type Skill struct {
+	Command     string // name used to invoke the skill, i.e. the directory name
+	Name        string
+	Description string
+	Body        string
+}
+
+func loadSkills() []Skill {
+	entries, err := os.ReadDir(filepath.Join(".claude", "skills"))
+	if err != nil {
+		return nil
+	}
+
+	var skills []Skill
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		data, err := os.ReadFile(filepath.Join(".claude", "skills", entry.Name(), "SKILL.md"))
+		if err != nil {
+			continue
+		}
+
+		name, description, body := parseSkillFile(string(data))
+		if name == "" {
+			name = entry.Name()
+		}
+		skills = append(skills, Skill{
+			Command:     entry.Name(),
+			Name:        name,
+			Description: description,
+			Body:        body,
+		})
+	}
+
+	return skills
+}
+
+// parseSkillFile extracts the name/description from the YAML frontmatter and
+// the body that follows the closing "---" delimiter.
+func parseSkillFile(contents string) (name string, description string, body string) {
+	lines := strings.Split(contents, "\n")
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
+		return "", "", strings.TrimSpace(contents)
+	}
+
+	end := -1
+	for i := 1; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) == "---" {
+			end = i
+			break
+		}
+
+		key, value, ok := strings.Cut(lines[i], ":")
+		if !ok {
+			continue
+		}
+
+		value = strings.Trim(strings.TrimSpace(value), `"'`)
+		switch strings.TrimSpace(key) {
+		case "name":
+			name = value
+		case "description":
+			description = value
+		}
+	}
+
+	if end == -1 {
+		return name, description, ""
+	}
+
+	return name, description, strings.TrimSpace(strings.Join(lines[end+1:], "\n"))
+}
+
+func findSkill(skills []Skill, command string) *Skill {
+	for i := range skills {
+		if strings.EqualFold(skills[i].Command, command) || strings.EqualFold(skills[i].Name, command) {
+			return &skills[i]
+		}
+	}
+	return nil
+}
+
+// skillsSystemMessage advertises every skill to the model at disclosure level
+// 1: name and description only, never the body.
+func skillsSystemMessage(skills []Skill) string {
+	var b strings.Builder
+	b.WriteString("You have access to the following skills:\n\n")
+	for _, skill := range skills {
+		fmt.Fprintf(&b, "- %s: %s\n", skill.Name, skill.Description)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
 func main() {
 
 	baseUrl := os.Getenv("OPENROUTER_BASE_URL")
@@ -115,7 +212,21 @@ func main() {
 		panic("Prompt must not be empty")
 	}
 
-	messages := []openai.ChatCompletionMessageParamUnion{openai.UserMessage(prompt)}
+	skills := loadSkills()
+
+	messages := []openai.ChatCompletionMessageParamUnion{}
+	if len(skills) > 0 {
+		messages = append(messages, openai.SystemMessage(skillsSystemMessage(skills)))
+	}
+
+	userContent := prompt
+	if strings.HasPrefix(prompt, "/") {
+		command, _, _ := strings.Cut(strings.TrimPrefix(prompt, "/"), " ")
+		if skill := findSkill(skills, command); skill != nil {
+			userContent = skill.Body
+		}
+	}
+	messages = append(messages, openai.UserMessage(userContent))
 
 	fmt.Fprintln(os.Stderr, "Logs from your program will appear here!")
 
